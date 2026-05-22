@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "name": "pathpulse-web",
+  "builds": [
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "https://api.pathpulse.app/api/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ],
+  "env": {
+    "VITE_API_BASE_URL": "@pathpulse_api_url",
+    "VITE_WS_URL": "@pathpulse_ws_url",
+    "VITE_MAPBOX_TOKEN": "@pathpulse_mapbox_token"
+  }
+}

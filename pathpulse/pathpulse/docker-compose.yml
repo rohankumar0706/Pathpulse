@@ -1,0 +1,145 @@
+version: '3.9'
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pathpulse-postgres
+    environment:
+      POSTGRES_DB: pathpulse
+      POSTGRES_USER: pathpulse
+      POSTGRES_PASSWORD: pathpulse_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pathpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pathpulse-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: pathpulse-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis_secret --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - pathpulse-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: pathpulse-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - pathpulse-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: pathpulse-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - pathpulse-net
+
+  scylladb:
+    image: scylladb/scylla:5.2
+    container_name: pathpulse-scylla
+    ports:
+      - "9042:9042"
+    volumes:
+      - scylla_data:/var/lib/scylla
+    command: --developer-mode=1
+    networks:
+      - pathpulse-net
+
+  # ── Application Services ────────────────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: pathpulse-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pathpulse
+      SPRING_DATASOURCE_USERNAME: pathpulse
+      SPRING_DATASOURCE_PASSWORD: pathpulse_secret
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_secret
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_production}
+      JWT_EXPIRATION_MS: 86400000
+    networks:
+      - pathpulse-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: pathpulse-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080
+      VITE_WS_URL: ws://localhost:8080
+    networks:
+      - pathpulse-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: pathpulse-nginx
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - pathpulse-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  scylla_data:
+
+networks:
+  pathpulse-net:
+    driver: bridge
